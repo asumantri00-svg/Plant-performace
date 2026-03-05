@@ -96,11 +96,14 @@ export default function App() {
 
   useEffect(() => {
     fetch('/api/plants')
-      .then(res => res.json())
+      .then(res => res.ok ? res.json() : [])
       .then(data => {
-        setPlants(data);
-        if (data.length > 0) setSelectedPlant(data[0].id);
-      });
+        if (Array.isArray(data)) {
+          setPlants(data);
+          if (data.length > 0) setSelectedPlant(data[0].id);
+        }
+      })
+      .catch(err => console.error("Failed to fetch plants:", err));
   }, []);
 
   useEffect(() => {
@@ -109,21 +112,33 @@ export default function App() {
     
     // Fetch trend data (last 30 days)
     fetch(`/api/performance/${selectedPlant}`)
-      .then(res => res.json())
+      .then(res => res.ok ? res.json() : [])
       .then(data => {
-        setPerformanceData(data);
-        if (!selectedDate || selectedDate === format(new Date(), 'yyyy-MM-dd')) {
-          setCurrentData(data[0] || null);
-          setLoading(false);
+        if (Array.isArray(data)) {
+          setPerformanceData(data);
+          if (!selectedDate || selectedDate === format(new Date(), 'yyyy-MM-dd')) {
+            setCurrentData(data[0] || null);
+            setLoading(false);
+          }
         }
+      })
+      .catch(err => {
+        console.error("Failed to fetch performance data:", err);
+        setLoading(false);
       });
 
     // Fetch specific date data if selected and not today
     if (selectedDate && selectedDate !== format(new Date(), 'yyyy-MM-dd')) {
       fetch(`/api/performance/${selectedPlant}?date=${selectedDate}`)
-        .then(res => res.json())
+        .then(res => res.ok ? res.json() : [])
         .then(data => {
-          setCurrentData(data[0] || null);
+          if (Array.isArray(data)) {
+            setCurrentData(data[0] || null);
+            setLoading(false);
+          }
+        })
+        .catch(err => {
+          console.error("Failed to fetch date-specific data:", err);
           setLoading(false);
         });
     }
@@ -138,7 +153,7 @@ export default function App() {
     const stopRemark = selectedGrade === 'STOP PLANT' ? (Math.random() > 0.5 ? "Annual maintenance" : "No planning from PPIC") : null;
 
     // Grade variation factor
-    const gradeHash = selectedGrade.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    const gradeHash = (selectedGrade || '').split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     const gradeFactor = isStopped ? 0 : (0.85 + (gradeHash % 30) / 100);
 
     const total = isStopped ? 0 : currentData.total_production * gradeFactor;
@@ -339,21 +354,22 @@ export default function App() {
   const metrics = getPlantMetrics();
 
   const trendData = React.useMemo(() => {
-    if (!metrics || !metrics.utilityMetrics || performanceData.length === 0) return [];
+    if (!metrics || !metrics.utilityMetrics || !Array.isArray(performanceData) || performanceData.length === 0) return [];
     
     const selectedUtility = metrics.utilityMetrics.find(u => u.id === utilityTrendFilter);
     if (!selectedUtility) return [];
 
-    const gradeHash = selectedGrade.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    const gradeHash = (selectedGrade || '').split('').reduce((a, b) => a + b.charCodeAt(0), 0);
 
     return performanceData.slice(0, 15).reverse().map((d, i) => {
-      const dateHash = d.date.split('-').reduce((a, b) => a + parseInt(b), 0);
+      const dateStr = d.date || '';
+      const dateHash = dateStr.split('-').reduce((a, b) => a + (parseInt(b) || 0), 0);
       // Standardized variation: some days over budget, some under
       const dayFactor = 0.82 + ((dateHash + gradeHash + i) % 45) / 100; 
       const actual = selectedUtility.actual * dayFactor;
       
       return {
-        date: d.date,
+        date: dateStr, // Keep raw date string for XAxis tickFormatter
         actual: actual,
         budget: selectedUtility.budget,
       };
@@ -361,15 +377,16 @@ export default function App() {
   }, [metrics, utilityTrendFilter, performanceData, selectedGrade]);
 
   const chemicalTrendData = React.useMemo(() => {
-    if (!metrics || !metrics.chemicals || performanceData.length === 0) return [];
+    if (!metrics || !metrics.chemicals || !Array.isArray(performanceData) || performanceData.length === 0) return [];
     const selectedChem = metrics.chemicals.find(c => c.label === chemicalTrendFilter);
     if (!selectedChem) return [];
-    const gradeHash = selectedGrade.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    const gradeHash = (selectedGrade || '').split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     return performanceData.slice(0, 15).reverse().map((d, i) => {
-      const dateHash = d.date.split('-').reduce((a, b) => a + parseInt(b), 0);
+      const dateStr = d.date || '';
+      const dateHash = dateStr.split('-').reduce((a, b) => a + (parseInt(b) || 0), 0);
       const dayFactor = 0.85 + ((dateHash + gradeHash + i) % 35) / 100;
       return {
-        date: d.date,
+        date: dateStr, // Keep raw date string
         actual: selectedChem.actual * dayFactor,
         budget: selectedChem.budget,
       };
@@ -377,21 +394,33 @@ export default function App() {
   }, [metrics, chemicalTrendFilter, performanceData, selectedGrade]);
 
   const qualityTrendData = React.useMemo(() => {
-    if (!metrics || !metrics.quality || performanceData.length === 0) return [];
+    if (!metrics || !metrics.quality || !Array.isArray(performanceData) || performanceData.length === 0) return [];
     const allItems = metrics.quality.sections.flatMap(s => s.items);
     const selectedItem = allItems.find(item => item.label === qualityTrendFilter);
     if (!selectedItem || typeof selectedItem.value !== 'number') return [];
-    const gradeHash = selectedGrade.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    const gradeHash = (selectedGrade || '').split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     return performanceData.slice(0, 15).reverse().map((d, i) => {
-      const dateHash = d.date.split('-').reduce((a, b) => a + parseInt(b), 0);
+      const dateStr = d.date || '';
+      const dateHash = dateStr.split('-').reduce((a, b) => a + (parseInt(b) || 0), 0);
       const dayFactor = 0.95 + ((dateHash + gradeHash + i) % 15) / 100; 
       return {
-        date: d.date,
+        date: dateStr, // Keep raw date string
         value: selectedItem.value * dayFactor,
         max: selectedItem.max,
       };
     });
   }, [metrics, qualityTrendFilter, performanceData, selectedGrade]);
+
+  const safeFormat = (date: string | Date | null | undefined, formatStr: string, fallback: string = 'N/A') => {
+    if (!date) return fallback;
+    try {
+      const d = typeof date === 'string' ? new Date(date) : date;
+      if (isNaN(d.getTime())) return fallback;
+      return format(d, formatStr);
+    } catch (e) {
+      return fallback;
+    }
+  };
 
   if (loading && plants.length === 0) {
     return (
@@ -481,7 +510,7 @@ export default function App() {
           </div>
           <div className="flex items-center gap-6">
             <div className="flex flex-col items-end">
-              <span className="text-sm font-bold text-slate-700">{format(new Date(selectedDate), 'EEEE, dd MMMM yyyy')}</span>
+              <span className="text-sm font-bold text-slate-700">{safeFormat(selectedDate, 'EEEE, dd MMMM yyyy')}</span>
               <span className="text-xs text-slate-400">Shift A - Day Operation</span>
             </div>
             <div 
@@ -513,7 +542,7 @@ export default function App() {
               </div>
               <h2 className="text-2xl font-black uppercase tracking-tight mb-2">No Data Found</h2>
               <p className="text-slate-600 font-medium max-w-md">
-                There is no performance record available for <span className="font-bold text-amber-700">{format(new Date(selectedDate), 'EEEE, dd MMMM yyyy')}</span>. 
+                There is no performance record available for <span className="font-bold text-amber-700">{selectedDate ? safeFormat(selectedDate, 'EEEE, dd MMMM yyyy') : 'the selected date'}</span>. 
                 Please select another date from the calendar.
               </p>
             </motion.div>
@@ -572,7 +601,11 @@ export default function App() {
                   <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Raw In</p>
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold text-slate-600">{metrics?.rawIn.label}</span>
-                    <span className="text-sm font-black text-slate-900">{metrics?.rawIn.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                    <span className="text-sm font-black text-slate-900">
+                      {typeof metrics?.rawIn.value === 'number' 
+                        ? metrics.rawIn.value.toLocaleString(undefined, { maximumFractionDigits: 2 }) 
+                        : '0.00'}
+                    </span>
                   </div>
                 </div>
                 <div className="p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
@@ -581,7 +614,11 @@ export default function App() {
                     {metrics?.products.map((prod, idx) => (
                       <div key={idx} className="flex justify-between items-center">
                         <span className="text-xs font-bold text-slate-600">{prod.label}</span>
-                        <span className="text-sm font-black text-emerald-700">{prod.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                        <span className="text-sm font-black text-emerald-700">
+                          {typeof prod.value === 'number' 
+                            ? prod.value.toLocaleString(undefined, { maximumFractionDigits: 2 }) 
+                            : '0.00'}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -681,11 +718,11 @@ export default function App() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => format(new Date(val), 'dd MMM')} />
+                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => safeFormat(val, 'dd MMM')} />
                     <YAxis tick={{fontSize: 10}} />
                     <Tooltip 
                       contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                      formatter={(value: number) => [value.toFixed(2), 'Value']}
+                      formatter={(value: any) => [typeof value === 'number' ? value.toFixed(2) : '0.00', 'Value']}
                     />
                     <Area 
                       type="monotone" 
@@ -773,11 +810,12 @@ export default function App() {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={performanceData.slice(0, 15).reverse()}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => format(new Date(val), 'dd MMM')} />
+                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => safeFormat(val, 'dd MMM')} />
                     <YAxis tick={{fontSize: 10}} />
                     <Tooltip 
                       cursor={{fill: '#f8fafc'}}
                       contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      formatter={(value: any) => [typeof value === 'number' ? value.toFixed(2) : '0.00', 'Ton']}
                     />
                     <Bar dataKey="total_production" fill="#10b981" radius={[4, 4, 0, 0]} barSize={30} />
                   </BarChart>
@@ -855,11 +893,11 @@ export default function App() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => format(new Date(val), 'dd MMM')} />
+                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => safeFormat(val, 'dd MMM')} />
                     <YAxis tick={{fontSize: 10}} />
                     <Tooltip 
                       contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                      formatter={(value: number) => [value.toFixed(2), 'Value']}
+                      formatter={(value: any) => [typeof value === 'number' ? value.toFixed(2) : '0.00', 'Value']}
                     />
                     <Area 
                       type="monotone" 
@@ -908,11 +946,11 @@ export default function App() {
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={qualityTrendData}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => format(new Date(val), 'dd MMM')} />
+                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => safeFormat(val, 'dd MMM')} />
                     <YAxis tick={{fontSize: 10}} />
                     <Tooltip 
                       contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                      formatter={(value: number) => [value.toFixed(2), 'Value']}
+                      formatter={(value: any) => [typeof value === 'number' ? value.toFixed(2) : '0.00', 'Value']}
                     />
                     <Line 
                       type="monotone" 

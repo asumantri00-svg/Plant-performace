@@ -12,21 +12,16 @@ interface UtilityDonutProps {
 
 export default function UtilityDonut({ title, unit, actual, budget, percentage }: UtilityDonutProps) {
   const isOverBudget = percentage > 100;
+  const gradientId = `grad-${title.replace(/\s+/g, '').toLowerCase()}`;
   
+  // We want the circle to represent 100% budget.
+  // If over 100%, we show a full circle of the "over budget" color.
   const chartData = isOverBudget 
-    ? [
-        { value: 100 },
-        { value: Math.max(0, percentage - 100) }
-      ]
+    ? [{ value: 100 }] 
     : [
         { value: Math.max(0, percentage) },
         { value: Math.max(0, 100 - percentage) }
       ];
-
-  // Color logic: green for budget, red for excess if over budget
-  const colors = isOverBudget 
-    ? ['#10b981', '#ef4444'] // Emerald-500 (Budget) and Red-500 (Excess)
-    : ['#10b981', '#f1f5f9']; // Emerald-500 (Actual) and Slate-100 (Remaining)
 
   return (
     <div className="flex flex-col items-center p-4 bg-white rounded-2xl border border-slate-100 shadow-sm">
@@ -35,6 +30,12 @@ export default function UtilityDonut({ title, unit, actual, budget, percentage }
       <div className="w-40 h-40 relative mb-4">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
+            <defs>
+              <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#53E372" />
+                <stop offset="100%" stopColor="#F1F77D" />
+              </linearGradient>
+            </defs>
             <Pie
               data={chartData}
               cx="50%"
@@ -46,17 +47,24 @@ export default function UtilityDonut({ title, unit, actual, budget, percentage }
               paddingAngle={0}
               dataKey="value"
               stroke="none"
+              isAnimationActive={true}
             >
-              {chartData.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={colors[index]} />
-              ))}
+              {chartData.map((entry, index) => {
+                let fill;
+                if (isOverBudget) {
+                  fill = '#EEB348';
+                } else {
+                  fill = index === 0 ? `url(#${gradientId})` : '#f1f5f9';
+                }
+                return <Cell key={`cell-${index}`} fill={fill} />;
+              })}
             </Pie>
           </PieChart>
         </ResponsiveContainer>
         
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
-            <span className={cn("text-xl font-black", isOverBudget ? "text-red-600" : "text-[#001f3f]")}>
+            <span className={cn("text-xl font-black", isOverBudget ? "text-[#EEB348]" : "text-[#001f3f]")}>
               {(percentage ?? 0).toFixed(2)}%
             </span>
           </div>
