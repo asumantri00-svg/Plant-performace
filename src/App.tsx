@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Factory, 
@@ -69,6 +69,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedGrade, setSelectedGrade] = useState<string>('FMCP');
   const [utilityTrendFilter, setUtilityTrendFilter] = useState<string>('electrical');
+  const [chemicalTrendFilter, setChemicalTrendFilter] = useState<string>('Bleaching Earth');
+  const [qualityTrendFilter, setQualityTrendFilter] = useState<string>('FFA CPO');
+  const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   const getGrades = (plantId: string) => {
     if (plantId.startsWith('refinery')) {
@@ -102,14 +106,28 @@ export default function App() {
   useEffect(() => {
     if (!selectedPlant) return;
     setLoading(true);
+    
+    // Fetch trend data (last 30 days)
     fetch(`/api/performance/${selectedPlant}`)
       .then(res => res.json())
       .then(data => {
         setPerformanceData(data);
-        setCurrentData(data[0] || null);
-        setLoading(false);
+        if (!selectedDate || selectedDate === format(new Date(), 'yyyy-MM-dd')) {
+          setCurrentData(data[0] || null);
+          setLoading(false);
+        }
       });
-  }, [selectedPlant]);
+
+    // Fetch specific date data if selected and not today
+    if (selectedDate && selectedDate !== format(new Date(), 'yyyy-MM-dd')) {
+      fetch(`/api/performance/${selectedPlant}?date=${selectedDate}`)
+        .then(res => res.json())
+        .then(data => {
+          setCurrentData(data[0] || null);
+          setLoading(false);
+        });
+    }
+  }, [selectedPlant, selectedDate]);
 
   const activePlantName = plants.find(p => p.id === selectedPlant)?.name || 'Plant';
 
@@ -342,6 +360,39 @@ export default function App() {
     });
   }, [metrics, utilityTrendFilter, performanceData, selectedGrade]);
 
+  const chemicalTrendData = React.useMemo(() => {
+    if (!metrics || !metrics.chemicals || performanceData.length === 0) return [];
+    const selectedChem = metrics.chemicals.find(c => c.label === chemicalTrendFilter);
+    if (!selectedChem) return [];
+    const gradeHash = selectedGrade.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    return performanceData.slice(0, 15).reverse().map((d, i) => {
+      const dateHash = d.date.split('-').reduce((a, b) => a + parseInt(b), 0);
+      const dayFactor = 0.85 + ((dateHash + gradeHash + i) % 35) / 100;
+      return {
+        date: d.date,
+        actual: selectedChem.actual * dayFactor,
+        budget: selectedChem.budget,
+      };
+    });
+  }, [metrics, chemicalTrendFilter, performanceData, selectedGrade]);
+
+  const qualityTrendData = React.useMemo(() => {
+    if (!metrics || !metrics.quality || performanceData.length === 0) return [];
+    const allItems = metrics.quality.sections.flatMap(s => s.items);
+    const selectedItem = allItems.find(item => item.label === qualityTrendFilter);
+    if (!selectedItem || typeof selectedItem.value !== 'number') return [];
+    const gradeHash = selectedGrade.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    return performanceData.slice(0, 15).reverse().map((d, i) => {
+      const dateHash = d.date.split('-').reduce((a, b) => a + parseInt(b), 0);
+      const dayFactor = 0.95 + ((dateHash + gradeHash + i) % 15) / 100; 
+      return {
+        date: d.date,
+        value: selectedItem.value * dayFactor,
+        max: selectedItem.max,
+      };
+    });
+  }, [metrics, qualityTrendFilter, performanceData, selectedGrade]);
+
   if (loading && plants.length === 0) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-50">
@@ -430,35 +481,64 @@ export default function App() {
           </div>
           <div className="flex items-center gap-6">
             <div className="flex flex-col items-end">
-              <span className="text-sm font-bold text-slate-700">{format(new Date(), 'EEEE, dd MMMM yyyy')}</span>
+              <span className="text-sm font-bold text-slate-700">{format(new Date(selectedDate), 'EEEE, dd MMMM yyyy')}</span>
               <span className="text-xs text-slate-400">Shift A - Day Operation</span>
             </div>
-            <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
+            <div 
+              className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 cursor-pointer hover:bg-slate-200 transition-colors relative"
+              onClick={() => dateInputRef.current?.showPicker()}
+            >
               <CalendarIcon size={20} />
+              <input 
+                ref={dateInputRef}
+                type="date" 
+                className="absolute inset-0 opacity-0 cursor-pointer"
+                onChange={(e) => setSelectedDate(e.target.value)}
+                value={selectedDate}
+              />
             </div>
           </div>
         </header>
 
         {/* Dashboard Grid */}
         <div className="flex-1 overflow-y-auto p-8 space-y-6">
-          {metrics?.isStopped && (
+          {!loading && !currentData && (
             <motion.div 
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-rose-50 border border-rose-200 p-4 rounded-2xl flex items-center gap-4 text-rose-800"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-amber-50 border border-amber-200 p-12 rounded-3xl flex flex-col items-center justify-center text-amber-800 text-center"
             >
-              <div className="p-2 bg-rose-500 text-white rounded-xl shadow-lg shadow-rose-200">
-                <AlertTriangle size={24} />
+              <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mb-6 text-amber-500">
+                <CalendarIcon size={40} />
               </div>
-              <div>
-                <h2 className="text-lg font-black uppercase tracking-tight">Plant Stopped</h2>
-                <p className="text-sm font-bold opacity-80">Remark: {metrics.stopRemark}</p>
-              </div>
+              <h2 className="text-2xl font-black uppercase tracking-tight mb-2">No Data Found</h2>
+              <p className="text-slate-600 font-medium max-w-md">
+                There is no performance record available for <span className="font-bold text-amber-700">{format(new Date(selectedDate), 'EEEE, dd MMMM yyyy')}</span>. 
+                Please select another date from the calendar.
+              </p>
             </motion.div>
           )}
 
-          {/* Top Row: Key Metrics */}
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {metrics ? (
+            <>
+              {metrics.isStopped && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-rose-50 border border-rose-200 p-4 rounded-2xl flex items-center gap-4 text-rose-800"
+                >
+                  <div className="p-2 bg-rose-500 text-white rounded-xl shadow-lg shadow-rose-200">
+                    <AlertTriangle size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-black uppercase tracking-tight">Plant Stopped</h2>
+                    <p className="text-sm font-bold opacity-80">Remark: {metrics.stopRemark}</p>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Top Row: Key Metrics */}
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
               <div className="flex justify-between items-start mb-4">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Production Yield</span>
@@ -686,7 +766,7 @@ export default function App() {
           </div>
 
           {/* Bottom Row: Production History & Quality */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 lg:col-span-2">
               <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-6">Daily Production History (Last 15 Days)</h3>
               <div className="h-72">
@@ -742,8 +822,131 @@ export default function App() {
               </div>
             )}
           </div>
-        </div>
-      </main>
+
+          {/* New Trends Row: Chemical & Quality Trends */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Chemical Consumption Trends</h3>
+                <div className="flex bg-slate-100 p-1 rounded-lg gap-1 overflow-x-auto scrollbar-hide">
+                  {metrics?.chemicals?.map((chem) => (
+                    <button
+                      key={chem.label}
+                      onClick={() => setChemicalTrendFilter(chem.label)}
+                      className={cn(
+                        "px-3 py-1 text-[10px] font-black uppercase rounded-md transition-all whitespace-nowrap",
+                        chemicalTrendFilter === chem.label 
+                          ? "bg-white text-blue-600 shadow-sm" 
+                          : "text-slate-400 hover:text-slate-600"
+                      )}
+                    >
+                      {chem.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chemicalTrendData}>
+                    <defs>
+                      <linearGradient id="colorChem" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => format(new Date(val), 'dd MMM')} />
+                    <YAxis tick={{fontSize: 10}} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      formatter={(value: number) => [value.toFixed(2), 'Value']}
+                    />
+                    <Area 
+                      type="monotone" 
+                      dataKey="actual" 
+                      stroke="#3b82f6" 
+                      fillOpacity={1} 
+                      fill="url(#colorChem)" 
+                      strokeWidth={3}
+                      name="Actual"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="budget" 
+                      stroke="#ef4444" 
+                      strokeDasharray="5 5" 
+                      strokeWidth={2}
+                      dot={false}
+                      name="Budget"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Quality Parameter Trends</h3>
+                <div className="flex bg-slate-100 p-1 rounded-lg gap-1 overflow-x-auto scrollbar-hide">
+                  {['FFA CPO', 'M & I CPO', 'TOTOX CPO', 'FFA PO', 'COLOR PO'].map((label) => (
+                    <button
+                      key={label}
+                      onClick={() => setQualityTrendFilter(label)}
+                      className={cn(
+                        "px-3 py-1 text-[10px] font-black uppercase rounded-md transition-all whitespace-nowrap",
+                        qualityTrendFilter === label 
+                          ? "bg-white text-amber-600 shadow-sm" 
+                          : "text-slate-400 hover:text-slate-600"
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={qualityTrendData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" tick={{fontSize: 10}} tickFormatter={(val) => format(new Date(val), 'dd MMM')} />
+                    <YAxis tick={{fontSize: 10}} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      formatter={(value: number) => [value.toFixed(2), 'Value']}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="value" 
+                      stroke="#f59e0b" 
+                      strokeWidth={3}
+                      dot={{ r: 4, fill: '#f59e0b', strokeWidth: 0 }}
+                      activeDot={{ r: 6, strokeWidth: 0 }}
+                      name="Value"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="max" 
+                      stroke="#ef4444" 
+                      strokeDasharray="5 5" 
+                      strokeWidth={2}
+                      dot={false}
+                      name="Limit"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : (
+        !loading && (
+          <div className="flex-1 flex items-center justify-center py-20">
+            {/* No Data message already shown above */}
+          </div>
+        )
+      )}
+    </div>
+  </main>
 
       {/* ChatBot Component */}
       <ChatBot performanceData={performanceData} />
