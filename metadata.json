@@ -1,0 +1,5 @@
+{
+  "name": "Industrial Plant Performance Monitor",
+  "description": "A comprehensive performance monitoring dashboard for Refinery, Fractionation, Biodiesel, and Glycerine plants with AI-powered analysis.",
+  "requestFramePermissions": []
+}
