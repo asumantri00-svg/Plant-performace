@@ -11,42 +11,27 @@ const getApiKey = () => {
 const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 export async function analyzePerformance(data: any, query: string) {
-  const model = "gemini-3.1-pro-preview";
+  const model = "gemini-3-flash-preview";
   
   const systemInstruction = `
-    You are an expert data analyst and visualization specialist. 
-    You will be provided with a dataset (JSON format) and a user query.
-    Your task is to:
-    1. Analyze the data to answer the user's question.
-    2. Provide statistical insights (mean, median, trends, etc.) where relevant.
-    3. Suggest the most appropriate visualization to represent the data.
-    4. If the user asks for a chart, describe the data points clearly so the UI can render it.
+    You are an expert industrial performance analyst for a refinery and chemical plant complex.
+    You will be provided with performance data for various plants (Refinery, Fractionation, Biodiesel, etc.).
+    Your task is to analyze the data and provide insights, reports, and recommendations based on the user's query.
+    Focus on:
+    - Production Yields (RBD PO, PFAD)
+    - Utility and Chemical Consumption efficiency
+    - Quality metrics
+    - Downtime and Utilization
     
-    Dataset: ${JSON.stringify(data.slice(0, 100))} (showing first 100 rows)
-    
-    Query: ${query}
-    
-    Format your response in Markdown. Use tables for data summaries. 
-    If you suggest a chart, include a JSON block with the following structure:
-    \`\`\`chart
-    {
-      "type": "bar" | "line" | "pie" | "scatter",
-      "title": "Chart Title",
-      "xAxis": "column_name",
-      "yAxis": "column_name",
-      "data": [
-        { "label": "X Value", "value": Y Value },
-        ...
-      ]
-    }
-    \`\`\`
+    Provide concise, professional reports in Markdown format.
+    If the user asks for daily, monthly, or annual reports, use the provided data to synthesize a summary.
   `;
 
   try {
     const response = await ai.models.generateContent({
       model,
       contents: [
-        { role: "user", parts: [{ text: `Query: ${query}` }] }
+        { role: "user", parts: [{ text: `Data: ${JSON.stringify(data)}\n\nQuery: ${query}` }] }
       ],
       config: {
         systemInstruction,
@@ -56,6 +41,6 @@ export async function analyzePerformance(data: any, query: string) {
     return response.text;
   } catch (error) {
     console.error("Gemini API Error:", error);
-    return "I'm sorry, I encountered an error while analyzing the data. Please try again later.";
+    return "I'm sorry, I encountered an error while analyzing the performance data. Please try again later.";
   }
 }
