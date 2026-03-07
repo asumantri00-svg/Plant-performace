@@ -12,15 +12,19 @@ interface UtilityDonutProps {
 
 export default function UtilityDonut({ title, unit, actual, budget, percentage }: UtilityDonutProps) {
   const isOverBudget = percentage > 100;
+  const overflow = isOverBudget ? percentage - 100 : 0;
   const gradientId = `grad-${title.replace(/\s+/g, '').toLowerCase()}`;
   
-  // We want the circle to represent 100% budget.
-  // If over 100%, we show a full circle of the "over budget" color.
+  // If over 100%, we show the overflow part in amber and the rest in gradient.
+  // If under 100%, we show the actual part in gradient and the rest in gray.
   const chartData = isOverBudget 
-    ? [{ value: 100 }] 
+    ? [
+        { value: Math.min(100, overflow), type: 'overflow' },
+        { value: Math.max(0, 100 - overflow), type: 'base' }
+      ]
     : [
-        { value: Math.max(0, percentage) },
-        { value: Math.max(0, 100 - percentage) }
+        { value: Math.max(0, percentage), type: 'base' },
+        { value: Math.max(0, 100 - percentage), type: 'empty' }
       ];
 
   return (
@@ -51,10 +55,12 @@ export default function UtilityDonut({ title, unit, actual, budget, percentage }
             >
               {chartData.map((entry, index) => {
                 let fill;
-                if (isOverBudget) {
+                if (entry.type === 'overflow') {
                   fill = '#EEB348';
+                } else if (entry.type === 'empty') {
+                  fill = '#f1f5f9';
                 } else {
-                  fill = index === 0 ? `url(#${gradientId})` : '#f1f5f9';
+                  fill = `url(#${gradientId})`;
                 }
                 return <Cell key={`cell-${index}`} fill={fill} />;
               })}
