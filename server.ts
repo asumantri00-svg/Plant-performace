@@ -2,10 +2,19 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
+import { createClient } from "@supabase/supabase-js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const db = new Database("performance.db");
 
-// Initialize Database with mock data
+// Supabase Client
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
+
+// Initialize Database (Local fallback)
 db.exec(`
   CREATE TABLE IF NOT EXISTS plants (
     id TEXT PRIMARY KEY,
@@ -51,54 +60,12 @@ const plants = [
 const insertPlant = db.prepare("INSERT OR IGNORE INTO plants (id, name) VALUES (?, ?)");
 plants.forEach(p => insertPlant.run(p.toLowerCase().replace(/\s+/g, '_'), p));
 
-// Generate some mock data for the last 30 days if empty
-const count = db.prepare("SELECT COUNT(*) as count FROM performance_data").get() as { count: number };
-if (count.count === 0) {
-  const insertData = db.prepare(`
-    INSERT INTO performance_data (
-      plant_id, date, rbd_po_yield, pfad_yield, total_production, target_production,
-      electrical_consumption, steam_consumption, cng_consumption, demin_water, soft_water, solar_consumption,
-      bleaching_earth, phosphoric_acid, efficiency, utilization, downtime_hours, working_hours
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const now = new Date();
-  plants.forEach(plant => {
-    const plantId = plant.toLowerCase().replace(/\s+/g, '_');
-    for (let i = 0; i < 60; i++) {
-      const d = new Date();
-      d.setDate(now.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-      
-      insertData.run(
-        plantId,
-        dateStr,
-        90 + Math.random() * 5, // rbd_po_yield
-        4 + Math.random() * 2,  // pfad_yield
-        15000 + Math.random() * 2000, // total_production
-        24000, // target_production
-        120 + Math.random() * 30, // electrical
-        800 + Math.random() * 100, // steam
-        80 + Math.random() * 20, // cng
-        1000 + Math.random() * 200, // demin
-        1500 + Math.random() * 300, // soft water
-        50 + Math.random() * 10, // solar
-        200 + Math.random() * 50, // bleaching
-        5 + Math.random() * 3, // phosphoric
-        95 + Math.random() * 10, // efficiency
-        60 + Math.random() * 30, // utilization
-        Math.random() * 5, // downtime
-        24 - Math.random() * 2 // working hours
-      );
-    }
-  });
-}
-
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // API Routes
   app.get("/api/plants", (req, res) => {
@@ -106,10 +73,25 @@ async function startServer() {
     res.json(rows);
   });
 
-  app.get("/api/performance/:plantId", (req, res) => {
+  app.get("/api/performance/:plantId", async (req, res) => {
     const { plantId } = req.params;
     const { date } = req.query;
     
+    // Try Supabase first
+    if (supabase) {
+      let query = supabase.from('performance_data').select('*').eq('plant_id', plantId);
+      if (date) {
+        query = query.eq('date', date);
+      } else {
+        query = query.order('date', { ascending: false }).limit(30);
+      }
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return res.json(data);
+      }
+    }
+
+    // Fallback to SQLite
     let query = "SELECT * FROM performance_data WHERE plant_id = ?";
     const params = [plantId];
     
@@ -122,6 +104,70 @@ async function startServer() {
     
     const rows = db.prepare(query).all(...params);
     res.json(rows);
+  });
+
+  app.post("/api/performance", async (req, res) => {
+    const data = req.body;
+    if (!Array.isArray(data)) {
+      return res.status(400).json({ error: "Data must be an array" });
+    }
+
+    // Save to Supabase
+    let supabaseSuccess = false;
+    if (supabase) {
+      try {
+        const { error } = await supabase.from('performance_data').insert(data);
+        if (!error) {
+          supabaseSuccess = true;
+        } else {
+          console.error("Supabase Insert Error:", error);
+        }
+      } catch (err) {
+        console.error("Supabase Connection Error:", err);
+      }
+    }
+
+    // Always save to SQLite as local cache/fallback
+    const insertData = db.prepare(`
+      INSERT INTO performance_data (
+        plant_id, date, rbd_po_yield, pfad_yield, total_production, target_production,
+        electrical_consumption, steam_consumption, cng_consumption, demin_water, soft_water, solar_consumption,
+        bleaching_earth, phosphoric_acid, efficiency, utilization, downtime_hours, working_hours
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const transaction = db.transaction((items) => {
+      for (const item of items) {
+        insertData.run(
+          item.plant_id,
+          item.date,
+          item.rbd_po_yield || 0,
+          item.pfad_yield || 0,
+          item.total_production || 0,
+          item.target_production || 0,
+          item.electrical_consumption || 0,
+          item.steam_consumption || 0,
+          item.cng_consumption || 0,
+          item.demin_water || 0,
+          item.soft_water || 0,
+          item.solar_consumption || 0,
+          item.bleaching_earth || 0,
+          item.phosphoric_acid || 0,
+          item.efficiency || 0,
+          item.utilization || 0,
+          item.downtime_hours || 0,
+          item.working_hours || 0
+        );
+      }
+    });
+
+    try {
+      transaction(data);
+      res.json({ success: true, count: data.length, supabase: supabaseSuccess });
+    } catch (error: any) {
+      console.error("Database Error:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.get("/api/stats/summary", (req, res) => {

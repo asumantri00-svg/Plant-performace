@@ -10,7 +10,10 @@ import {
   Beaker,
   Calendar as CalendarIcon,
   ChevronRight,
-  Menu
+  Menu,
+  Plus,
+  X,
+  FileSpreadsheet
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -32,6 +35,9 @@ import Gauge from './components/Gauge';
 import ProductionGauge from './components/ProductionGauge';
 import UtilityDonut from './components/UtilityDonut';
 import ChatBot from './components/ChatBot';
+import DataUploader from './components/DataUploader';
+import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { Cloud, CloudOff, RefreshCw } from 'lucide-react';
 
 interface Plant {
   id: string;
@@ -72,7 +78,50 @@ export default function App() {
   const [chemicalTrendFilter, setChemicalTrendFilter] = useState<string>('Bleaching Earth');
   const [qualityTrendFilter, setQualityTrendFilter] = useState<string>('FFA CPO');
   const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [activeModalTab, setActiveModalTab] = useState<'manual' | 'bulk'>('manual');
+  const [isSyncing, setIsSyncing] = useState(false);
   const dateInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshData = () => {
+    if (!selectedPlant) return;
+    setLoading(true);
+    
+    fetch(`/api/performance/${selectedPlant}`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        if (Array.isArray(data)) {
+          setPerformanceData(data);
+          const todayStr = format(new Date(), 'yyyy-MM-dd');
+          if (!selectedDate || selectedDate === todayStr) {
+            setCurrentData(data[0] || null);
+            setLoading(false);
+          }
+        }
+      })
+      .catch(err => {
+        console.error("Failed to fetch performance data:", err);
+        setLoading(false);
+      });
+
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (selectedDate && selectedDate !== todayStr) {
+      fetch(`/api/performance/${selectedPlant}?date=${selectedDate}`)
+        .then(res => res.ok ? res.json() : [])
+        .then(data => {
+          if (Array.isArray(data)) {
+            setCurrentData(data[0] || null);
+            setLoading(false);
+          }
+        })
+        .catch(err => {
+          console.error("Failed to fetch date-specific data:", err);
+          setLoading(false);
+        });
+    }
+  };
 
   const getGrades = (plantId: string) => {
     if (plantId.startsWith('refinery')) {
@@ -107,42 +156,41 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedPlant) return;
-    setLoading(true);
-    
-    // Fetch trend data (last 30 days)
-    fetch(`/api/performance/${selectedPlant}`)
-      .then(res => res.ok ? res.json() : [])
-      .then(data => {
-        if (Array.isArray(data)) {
-          setPerformanceData(data);
-          if (!selectedDate || selectedDate === format(new Date(), 'yyyy-MM-dd')) {
-            setCurrentData(data[0] || null);
-            setLoading(false);
-          }
-        }
-      })
-      .catch(err => {
-        console.error("Failed to fetch performance data:", err);
-        setLoading(false);
-      });
-
-    // Fetch specific date data if selected and not today
-    if (selectedDate && selectedDate !== format(new Date(), 'yyyy-MM-dd')) {
-      fetch(`/api/performance/${selectedPlant}?date=${selectedDate}`)
-        .then(res => res.ok ? res.json() : [])
-        .then(data => {
-          if (Array.isArray(data)) {
-            setCurrentData(data[0] || null);
-            setLoading(false);
-          }
-        })
-        .catch(err => {
-          console.error("Failed to fetch date-specific data:", err);
-          setLoading(false);
-        });
-    }
+    refreshData();
   }, [selectedPlant, selectedDate]);
+
+  const handleSyncToSupabase = async () => {
+    if (!supabase) {
+      alert('Supabase is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in your environment.');
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      // Fetch all local data to sync
+      const res = await fetch(`/api/performance/${selectedPlant}`);
+      const localData = await res.json();
+
+      if (!Array.isArray(localData) || localData.length === 0) {
+        alert('No local data to sync.');
+        setIsSyncing(false);
+        return;
+      }
+
+      // Upsert to Supabase
+      const { error } = await supabase
+        .from('performance_data')
+        .upsert(localData.map(({ id, ...rest }) => ({ ...rest })), { onConflict: 'plant_id,date' });
+
+      if (error) throw error;
+      alert('Successfully synced data to Supabase!');
+    } catch (error: any) {
+      console.error('Sync error:', error);
+      alert(`Sync failed: ${error.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const activePlantName = plants.find(p => p.id === selectedPlant)?.name || 'Plant';
 
@@ -171,7 +219,7 @@ export default function App() {
     // Production Target Variation (65% to 75%)
     const targetBase = 0.65 + (Math.abs((selectedPlant + selectedGrade).split('').reduce((a, b) => a + b.charCodeAt(0), 0) % 11) / 100);
     const productionPercentage = isStopped ? 0 : targetBase * 100;
-    const targetTonnage = isStopped ? 0 : total / targetBase;
+    const targetTonnage = isStopped ? 0 : (targetBase > 0 ? total / targetBase : 0);
 
     let rawIn = { label: 'Raw Material', value: total * 1.05 };
     let products = [{ label: 'Product', value: total, yield: 95 }];
@@ -230,10 +278,11 @@ export default function App() {
 
     if (selectedPlant.startsWith('refinery') || selectedPlant === 'ptr') {
       const isPTRBio = selectedPlant === 'ptr' && selectedGrade === 'RBDPO BIODIESEL';
-      const rbdYield = isPTRBio ? 98.5 : (currentData.rbd_po_yield + (gradeHash % 5) - 2.5);
-      const pfadYield = isPTRBio ? 1.5 : (currentData.pfad_yield + (gradeHash % 2) - 1);
+      const rbdYield = isPTRBio ? 98.5 : ((currentData?.rbd_po_yield ?? 90) + (gradeHash % 5) - 2.5);
+      const pfadYield = isPTRBio ? 1.5 : ((currentData?.pfad_yield ?? 4) + (gradeHash % 2) - 1);
       
-      const cpoUsage = isStopped ? 0 : total / ((rbdYield + pfadYield) / 100);
+      const totalYield = (rbdYield + pfadYield) / 100;
+      const cpoUsage = isStopped ? 0 : (totalYield > 0 ? total / totalYield : 0);
       rawIn = { label: 'CPO Usage', value: cpoUsage };
       products = [
         { label: 'RBDPO', value: total * (rbdYield / (rbdYield + pfadYield)), yield: rbdYield },
@@ -339,9 +388,10 @@ export default function App() {
         { label: 'NaOH', actual: 97.56, budget: 100, percent: 97.56 }
       ];
     } else if (selectedPlant === 'clarification') {
-      rawIn = { label: 'Crude Fame In', value: total / 0.9945 };
+      const yieldFactor = 0.9945;
+      rawIn = { label: 'Crude Fame In', value: yieldFactor > 0 ? total / yieldFactor : total };
       products = [
-        { label: 'Fame', value: total, yield: 99.45 }
+        { label: 'Fame', value: total, yield: yieldFactor * 100 }
       ];
       chemicals = [
         { label: 'Filter Aid', actual: 53.89, budget: 100, percent: 53.89 }
@@ -445,7 +495,7 @@ export default function App() {
           <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white shrink-0">
             <Factory size={20} />
           </div>
-          {sidebarOpen && <span className="font-bold text-lg text-white tracking-tight">Sinar Mas</span>}
+          {sidebarOpen && <span className="font-bold text-lg text-white tracking-tight">SABAR MAS</span>}
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 scrollbar-hide">
@@ -509,6 +559,29 @@ export default function App() {
             )}
           </div>
           <div className="flex items-center gap-6">
+            {isSupabaseConfigured() ? (
+              <button
+                onClick={handleSyncToSupabase}
+                disabled={isSyncing}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 disabled:opacity-50"
+              >
+                {isSyncing ? <RefreshCw size={18} className="animate-spin" /> : <Cloud size={18} />}
+                <span>SYNC SUPABASE</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-400 rounded-xl font-bold text-sm cursor-not-allowed" title="Supabase not configured">
+                <CloudOff size={18} />
+                <span>SYNC SUPABASE</span>
+              </div>
+            )}
+            <DataUploader plants={plants} onUploadSuccess={refreshData} />
+            <button
+              onClick={() => setIsSupabaseModalOpen(true)}
+              className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm transition-all"
+            >
+              <Plus size={18} />
+              <span>MANUAL INPUT</span>
+            </button>
             <div className="flex flex-col items-end">
               <span className="text-sm font-bold text-slate-700">{safeFormat(selectedDate, 'EEEE, dd MMMM yyyy')}</span>
               <span className="text-xs text-slate-400">Shift A - Day Operation</span>
@@ -985,6 +1058,249 @@ export default function App() {
       )}
     </div>
   </main>
+
+      {/* Supabase Input Modal */}
+      {isSupabaseModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden"
+          >
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div>
+                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Input New Performance Data</h2>
+                <p className="text-xs text-slate-500 font-bold uppercase">Sync with Supabase</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsSupabaseModalOpen(false);
+                  setSupabaseStatus(null);
+                }}
+                className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-400"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex border-b border-slate-100">
+              <button 
+                onClick={() => setActiveModalTab('manual')}
+                className={cn(
+                  "flex-1 py-3 text-xs font-black uppercase tracking-widest transition-all",
+                  activeModalTab === 'manual' ? "text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50/30" : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                Manual Input
+              </button>
+              <button 
+                onClick={() => setActiveModalTab('bulk')}
+                className={cn(
+                  "flex-1 py-3 text-xs font-black uppercase tracking-widest transition-all",
+                  activeModalTab === 'bulk' ? "text-emerald-600 border-b-2 border-emerald-500 bg-emerald-50/30" : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                Excel / CSV Import
+              </button>
+            </div>
+
+            {activeModalTab === 'manual' ? (
+              <form 
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setIsSubmitting(true);
+                  setSupabaseStatus(null);
+                  
+                  const formData = new FormData(e.currentTarget);
+                  const data = Object.fromEntries(formData.entries());
+                  
+                  // Convert numeric strings to numbers
+                  const numericFields = [
+                    'rbd_po_yield', 'pfad_yield', 'total_production', 'target_production',
+                    'electrical_consumption', 'steam_consumption', 'cng_consumption',
+                    'demin_water', 'soft_water', 'solar_consumption', 'bleaching_earth',
+                    'phosphoric_acid', 'efficiency', 'utilization', 'downtime_hours', 'working_hours'
+                  ];
+                  
+                  const formattedData: any = { ...data };
+                  numericFields.forEach(field => {
+                    if (formattedData[field]) {
+                      formattedData[field] = parseFloat(formattedData[field]);
+                    }
+                  });
+
+                  try {
+                    const response = await fetch('/api/performance', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify([formattedData])
+                    });
+                    
+                    const result = await response.json();
+                    if (response.ok) {
+                      setSupabaseStatus({ type: 'success', message: 'Data successfully saved!' });
+                      refreshData();
+                      setTimeout(() => {
+                        setIsSupabaseModalOpen(false);
+                        setSupabaseStatus(null);
+                      }, 2000);
+                    } else {
+                      throw new Error(result.error || 'Failed to save data');
+                    }
+                  } catch (err: any) {
+                    setSupabaseStatus({ type: 'error', message: err.message });
+                  } finally {
+                    setIsSubmitting(false);
+                  }
+                }}
+                className="p-6 overflow-y-auto max-h-[70vh] scrollbar-hide"
+              >
+                {supabaseStatus && (
+                  <div className={cn(
+                    "mb-6 p-4 rounded-xl text-sm font-bold flex items-center gap-3",
+                    supabaseStatus.type === 'success' ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-rose-50 text-rose-700 border border-rose-100"
+                  )}>
+                    {supabaseStatus.type === 'success' ? <Droplets size={18} /> : <AlertTriangle size={18} />}
+                    {supabaseStatus.message}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Plant Unit</label>
+                      <select name="plant_id" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20">
+                        {plants.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Date</label>
+                      <input type="date" name="date" required defaultValue={format(new Date(), 'yyyy-MM-dd')} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Production (Ton)</label>
+                      <input type="number" step="0.01" name="total_production" required className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">RBD PO Yield (%)</label>
+                        <input type="number" step="0.01" name="rbd_po_yield" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">PFAD Yield (%)</label>
+                        <input type="number" step="0.01" name="pfad_yield" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Electrical (KWH)</label>
+                      <input type="number" step="0.01" name="electrical_consumption" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Steam (KG)</label>
+                      <input type="number" step="0.01" name="steam_consumption" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Efficiency (%)</label>
+                        <input type="number" step="0.01" name="efficiency" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Utilization (%)</label>
+                        <input type="number" step="0.01" name="utilization" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Working (Hr)</label>
+                        <input type="number" step="0.01" name="working_hours" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Downtime (Hr)</label>
+                        <input type="number" step="0.01" name="downtime_hours" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-500/20" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-8 flex gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsSupabaseModalOpen(false)}
+                    className="flex-1 px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors"
+                  >
+                    CANCEL
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="flex-3 bg-[#001f3f] hover:bg-[#002d5c] text-white px-8 py-3 rounded-xl font-black uppercase tracking-widest transition-all shadow-xl shadow-slate-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+                  >
+                    {isSubmitting ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <Droplets size={18} />
+                    )}
+                    {isSubmitting ? 'SAVING...' : 'SAVE TO SUPABASE'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="p-8 flex flex-col items-center justify-center text-center space-y-6 overflow-y-auto max-h-[70vh]">
+                <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center shrink-0">
+                  <FileSpreadsheet size={32} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Bulk Import System</h3>
+                  <p className="text-xs text-slate-500 mt-2 max-w-xs mx-auto">
+                    Use the <strong>Upload Data</strong> button in the main header to import Excel files.
+                  </p>
+                </div>
+                
+                <div className="w-full bg-slate-50 p-4 rounded-2xl border border-slate-100 text-left">
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Supabase Setup</h4>
+                  <div className="bg-slate-900 text-slate-300 p-3 rounded-xl text-[9px] font-mono overflow-x-auto">
+                    <p className="text-emerald-400 mb-1">-- Run in Supabase SQL Editor:</p>
+                    <pre>
+{`CREATE TABLE performance_data (
+  id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  plant_id TEXT NOT NULL,
+  date DATE NOT NULL,
+  rbd_po_yield REAL,
+  pfad_yield REAL,
+  total_production REAL,
+  target_production REAL,
+  electrical_consumption REAL,
+  steam_consumption REAL,
+  cng_consumption REAL,
+  demin_water REAL,
+  soft_water REAL,
+  solar_consumption REAL,
+  bleaching_earth REAL,
+  phosphoric_acid REAL,
+  efficiency REAL,
+  utilization REAL,
+  downtime_hours REAL,
+  working_hours REAL,
+  UNIQUE(plant_id, date)
+);`}
+                    </pre>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setIsSupabaseModalOpen(false)}
+                  className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all"
+                >
+                  Got it
+                </button>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      )}
 
       {/* ChatBot Component */}
       <ChatBot performanceData={performanceData} />
