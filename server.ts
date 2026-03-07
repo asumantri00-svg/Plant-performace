@@ -2,8 +2,13 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
+import OpenAI from "openai";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const db = new Database("performance.db");
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 // Initialize Database with mock data
 db.exec(`
@@ -135,6 +140,45 @@ async function startServer() {
       GROUP BY plant_id
     `).all();
     res.json(stats);
+  });
+
+  app.post("/api/ai/openai", async (req, res) => {
+    if (!openai) {
+      return res.status(500).json({ error: "OpenAI API key not configured" });
+    }
+
+    const { data, query } = req.body;
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `You are an expert industrial performance analyst for a refinery and chemical plant complex.
+            You will be provided with performance data for various plants (Refinery, Fractionation, Biodiesel, etc.).
+            Your task is to analyze the data and provide insights, reports, and recommendations based on the user's query.
+            Focus on:
+            - Production Yields (RBD PO, PFAD)
+            - Utility and Chemical Consumption efficiency
+            - Quality metrics
+            - Downtime and Utilization
+            
+            Provide concise, professional reports in Markdown format.
+            If the user asks for daily, monthly, or annual reports, use the provided data to synthesize a summary.`
+          },
+          {
+            role: "user",
+            content: `Data: ${JSON.stringify(data)}\n\nQuery: ${query}`
+          }
+        ],
+      });
+
+      res.json({ text: completion.choices[0].message.content });
+    } catch (error: any) {
+      console.error("OpenAI Error:", error);
+      res.status(500).json({ error: error.message || "Failed to analyze with OpenAI" });
+    }
   });
 
   // Vite middleware for development

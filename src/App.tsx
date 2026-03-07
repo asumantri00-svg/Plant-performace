@@ -116,7 +116,8 @@ export default function App() {
       .then(data => {
         if (Array.isArray(data)) {
           setPerformanceData(data);
-          if (!selectedDate || selectedDate === format(new Date(), 'yyyy-MM-dd')) {
+          const todayStr = format(new Date(), 'yyyy-MM-dd');
+          if (!selectedDate || selectedDate === todayStr) {
             setCurrentData(data[0] || null);
             setLoading(false);
           }
@@ -128,7 +129,8 @@ export default function App() {
       });
 
     // Fetch specific date data if selected and not today
-    if (selectedDate && selectedDate !== format(new Date(), 'yyyy-MM-dd')) {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (selectedDate && selectedDate !== todayStr) {
       fetch(`/api/performance/${selectedPlant}?date=${selectedDate}`)
         .then(res => res.ok ? res.json() : [])
         .then(data => {
@@ -171,7 +173,7 @@ export default function App() {
     // Production Target Variation (65% to 75%)
     const targetBase = 0.65 + (Math.abs((selectedPlant + selectedGrade).split('').reduce((a, b) => a + b.charCodeAt(0), 0) % 11) / 100);
     const productionPercentage = isStopped ? 0 : targetBase * 100;
-    const targetTonnage = isStopped ? 0 : total / targetBase;
+    const targetTonnage = isStopped ? 0 : (targetBase > 0 ? total / targetBase : 0);
 
     let rawIn = { label: 'Raw Material', value: total * 1.05 };
     let products = [{ label: 'Product', value: total, yield: 95 }];
@@ -230,10 +232,11 @@ export default function App() {
 
     if (selectedPlant.startsWith('refinery') || selectedPlant === 'ptr') {
       const isPTRBio = selectedPlant === 'ptr' && selectedGrade === 'RBDPO BIODIESEL';
-      const rbdYield = isPTRBio ? 98.5 : (currentData.rbd_po_yield + (gradeHash % 5) - 2.5);
-      const pfadYield = isPTRBio ? 1.5 : (currentData.pfad_yield + (gradeHash % 2) - 1);
+      const rbdYield = isPTRBio ? 98.5 : ((currentData?.rbd_po_yield ?? 90) + (gradeHash % 5) - 2.5);
+      const pfadYield = isPTRBio ? 1.5 : ((currentData?.pfad_yield ?? 4) + (gradeHash % 2) - 1);
       
-      const cpoUsage = isStopped ? 0 : total / ((rbdYield + pfadYield) / 100);
+      const totalYield = (rbdYield + pfadYield) / 100;
+      const cpoUsage = isStopped ? 0 : (totalYield > 0 ? total / totalYield : 0);
       rawIn = { label: 'CPO Usage', value: cpoUsage };
       products = [
         { label: 'RBDPO', value: total * (rbdYield / (rbdYield + pfadYield)), yield: rbdYield },
@@ -339,9 +342,10 @@ export default function App() {
         { label: 'NaOH', actual: 97.56, budget: 100, percent: 97.56 }
       ];
     } else if (selectedPlant === 'clarification') {
-      rawIn = { label: 'Crude Fame In', value: total / 0.9945 };
+      const yieldFactor = 0.9945;
+      rawIn = { label: 'Crude Fame In', value: yieldFactor > 0 ? total / yieldFactor : total };
       products = [
-        { label: 'Fame', value: total, yield: 99.45 }
+        { label: 'Fame', value: total, yield: yieldFactor * 100 }
       ];
       chemicals = [
         { label: 'Filter Aid', actual: 53.89, budget: 100, percent: 53.89 }

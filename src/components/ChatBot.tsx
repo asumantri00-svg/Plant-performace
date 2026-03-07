@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Bot, User, X, Loader2 } from 'lucide-react';
+import { Send, Bot, User, X, Loader2, Sparkles, BrainCircuit } from 'lucide-react';
 import Markdown from 'react-markdown';
-import { analyzePerformance } from '../services/geminiService';
+import { analyzePerformance as analyzeWithGemini } from '../services/geminiService';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  model?: 'gemini' | 'openai';
 }
 
 export default function ChatBot({ performanceData }: { performanceData: any }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<'gemini' | 'openai'>('gemini');
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: 'Hello! I am your Plant Performance Analyst. How can I help you today? I can analyze daily, monthly, or annual performance trends.' }
   ]);
@@ -30,13 +32,39 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
 
     const userMsg = input;
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setMessages(prev => [...prev, { role: 'user', content: userMsg, model: selectedModel }]);
     setIsLoading(true);
 
-    const response = await analyzePerformance(performanceData, userMsg);
-    
-    setMessages(prev => [...prev, { role: 'assistant', content: response || 'No response' }]);
-    setIsLoading(false);
+    try {
+      let response = '';
+      if (selectedModel === 'gemini') {
+        response = await analyzeWithGemini(performanceData, userMsg) || 'No response from Gemini';
+      } else {
+        const res = await fetch('/api/ai/openai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: performanceData, query: userMsg })
+        });
+        
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || 'Failed to fetch from OpenAI');
+        }
+        
+        const data = await res.json();
+        response = data.text || 'No response from OpenAI';
+      }
+      
+      setMessages(prev => [...prev, { role: 'assistant', content: response, model: selectedModel }]);
+    } catch (error: any) {
+      console.error("Chat Error:", error);
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: `I encountered an error while processing your request with ${selectedModel.toUpperCase()}: ${error.message || 'Unknown error'}. Please try again.` 
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -61,16 +89,45 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
                 <Bot size={20} />
                 <span className="font-semibold">Performance Analyst AI</span>
               </div>
-              <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1 rounded">
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="flex bg-white/10 p-1 rounded-lg">
+                  <button 
+                    onClick={() => setSelectedModel('gemini')}
+                    className={cn(
+                      "px-2 py-1 text-[10px] font-bold rounded flex items-center gap-1 transition-all",
+                      selectedModel === 'gemini' ? "bg-white text-emerald-600" : "text-white/70 hover:text-white"
+                    )}
+                  >
+                    <Sparkles size={10} />
+                    GEMINI
+                  </button>
+                  <button 
+                    onClick={() => setSelectedModel('openai')}
+                    className={cn(
+                      "px-2 py-1 text-[10px] font-bold rounded flex items-center gap-1 transition-all",
+                      selectedModel === 'openai' ? "bg-white text-emerald-600" : "text-white/70 hover:text-white"
+                    )}
+                  >
+                    <BrainCircuit size={10} />
+                    OPENAI
+                  </button>
+                </div>
+                <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1 rounded">
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
               {messages.map((msg, i) => (
-                <div key={i} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
+                <div key={i} className={cn("flex flex-col", msg.role === 'user' ? "items-end" : "items-start")}>
+                  {msg.model && (
+                    <span className="text-[9px] font-black text-slate-400 mb-1 px-2 uppercase tracking-tighter">
+                      {msg.model}
+                    </span>
+                  )}
                   <div className={cn(
-                    "max-w-[80%] p-3 rounded-2xl text-sm shadow-sm",
+                    "max-w-[85%] p-3 rounded-2xl text-sm shadow-sm",
                     msg.role === 'user' ? "bg-emerald-600 text-white rounded-tr-none" : "bg-white text-slate-800 rounded-tl-none border border-slate-200"
                   )}>
                     <div className="prose prose-sm max-w-none prose-p:leading-relaxed">
