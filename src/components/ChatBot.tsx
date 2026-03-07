@@ -1,21 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Bot, User, X, Loader2, Sparkles, BrainCircuit } from 'lucide-react';
+import { Send, Bot, User, X, Loader2, Sparkles, BrainCircuit, BarChart2, Database, Zap } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { analyzePerformance as analyzeWithGemini } from '../services/geminiService';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import ChartRenderer from './ChartRenderer';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
-  model?: 'gemini' | 'openai';
+  model?: string;
 }
 
 export default function ChatBot({ performanceData }: { performanceData: any }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<'gemini' | 'openai'>('gemini');
+  const [isOpen, setIsOpen] = useState(true);
+  const [selectedModel, setSelectedModel] = useState<string>('Gemini 3.1 Pro');
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: 'Hello! I am your Plant Performance Analyst. How can I help you today? I can analyze daily, monthly, or annual performance trends.' }
+    { role: 'assistant', content: 'Hello! I am your AI Data Visualization Expert. Upload a dataset (CSV/JSON) and ask me to analyze it or create charts for you!' }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -37,7 +38,7 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
 
     try {
       let response = '';
-      if (selectedModel === 'gemini') {
+      if (selectedModel.includes('Gemini')) {
         response = await analyzeWithGemini(performanceData, userMsg) || 'No response from Gemini';
       } else {
         const res = await fetch('/api/ai/openai', {
@@ -48,11 +49,11 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
         
         if (!res.ok) {
           const errData = await res.json();
-          throw new Error(errData.error || 'Failed to fetch from OpenAI');
+          throw new Error(errData.error || 'Failed to fetch from AI');
         }
         
         const data = await res.json();
-        response = data.text || 'No response from OpenAI';
+        response = data.text || 'No response from AI';
       }
       
       setMessages(prev => [...prev, { role: 'assistant', content: response, model: selectedModel }]);
@@ -60,11 +61,37 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
       console.error("Chat Error:", error);
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: `I encountered an error while processing your request with ${selectedModel.toUpperCase()}: ${error.message || 'Unknown error'}. Please try again.` 
+        content: `I encountered an error while processing your request with ${selectedModel}: ${error.message || 'Unknown error'}. Please try again.` 
       }]);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const parseContent = (content: string) => {
+    const chartRegex = /```chart\n([\s\S]*?)\n```/g;
+    const parts = [];
+    let lastIndex = 0;
+    let match;
+
+    while ((match = chartRegex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ type: 'text', content: content.substring(lastIndex, match.index) });
+      }
+      try {
+        const chartData = JSON.parse(match[1]);
+        parts.push({ type: 'chart', content: chartData });
+      } catch (e) {
+        parts.push({ type: 'text', content: match[0] });
+      }
+      lastIndex = chartRegex.lastIndex;
+    }
+
+    if (lastIndex < content.length) {
+      parts.push({ type: 'text', content: content.substring(lastIndex) });
+    }
+
+    return parts;
   };
 
   return (
@@ -86,32 +113,21 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
           >
             <div className="bg-emerald-600 p-4 text-white flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <Bot size={20} />
-                <span className="font-semibold">Performance Analyst AI</span>
+                <BarChart2 size={20} />
+                <span className="font-semibold">AI Data Analyst</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="flex bg-white/10 p-1 rounded-lg">
-                  <button 
-                    onClick={() => setSelectedModel('gemini')}
-                    className={cn(
-                      "px-2 py-1 text-[10px] font-bold rounded flex items-center gap-1 transition-all",
-                      selectedModel === 'gemini' ? "bg-white text-emerald-600" : "text-white/70 hover:text-white"
-                    )}
-                  >
-                    <Sparkles size={10} />
-                    GEMINI
-                  </button>
-                  <button 
-                    onClick={() => setSelectedModel('openai')}
-                    className={cn(
-                      "px-2 py-1 text-[10px] font-bold rounded flex items-center gap-1 transition-all",
-                      selectedModel === 'openai' ? "bg-white text-emerald-600" : "text-white/70 hover:text-white"
-                    )}
-                  >
-                    <BrainCircuit size={10} />
-                    OPENAI
-                  </button>
-                </div>
+                <select 
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="bg-white/10 border-none text-[10px] font-bold rounded px-2 py-1 outline-none cursor-pointer hover:bg-white/20 transition-colors"
+                >
+                  <option value="Gemini 3.1 Pro" className="text-slate-800">Gemini 3.1 Pro</option>
+                  <option value="GPT-4o" className="text-slate-800">GPT-4o</option>
+                  <option value="Llama 3.1 405B" className="text-slate-800">Llama 3.1 405B</option>
+                  <option value="DeepSeek V3" className="text-slate-800">DeepSeek V3</option>
+                  <option value="Qwen 2.5 7B" className="text-slate-800">Qwen 2.5 7B</option>
+                </select>
                 <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1 rounded">
                   <X size={20} />
                 </button>
@@ -127,13 +143,17 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
                     </span>
                   )}
                   <div className={cn(
-                    "max-w-[85%] p-3 rounded-2xl text-sm shadow-sm",
+                    "max-w-[90%] p-3 rounded-2xl text-sm shadow-sm",
                     msg.role === 'user' ? "bg-emerald-600 text-white rounded-tr-none" : "bg-white text-slate-800 rounded-tl-none border border-slate-200"
                   )}>
                     <div className="prose prose-sm max-w-none prose-p:leading-relaxed">
-                      <Markdown>
-                        {msg.content}
-                      </Markdown>
+                      {parseContent(msg.content).map((part, idx) => (
+                        part.type === 'text' ? (
+                          <Markdown key={idx}>{part.content as string}</Markdown>
+                        ) : (
+                          <ChartRenderer key={idx} chart={part.content as any} />
+                        )
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -154,7 +174,7 @@ export default function ChatBot({ performanceData }: { performanceData: any }) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Ask about performance..."
+                placeholder="Ask about your data..."
                 className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
               <button

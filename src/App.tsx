@@ -449,7 +449,7 @@ export default function App() {
           <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white shrink-0">
             <Factory size={20} />
           </div>
-          {sidebarOpen && <span className="font-bold text-lg text-white tracking-tight">Sinar Mas</span>}
+          {sidebarOpen && <span className="font-bold text-lg text-white tracking-tight">SABAR MAS</span>}
         </div>
 
         <nav className="flex-1 overflow-y-auto py-4 scrollbar-hide">
